@@ -8,6 +8,10 @@ from os.path import isfile, join
 
 import logging
 
+import ssl
+
+ssl._create_default_https_context = ssl._create_unverified_context
+
 
 class ProgressBar:
     """
@@ -141,7 +145,8 @@ def load_data_from_file(dir_path, output_path='.'):
 
 
 # ------- test ------- #
-TAR_PATH = '../data/fr-en.tgz'
+TAR_PATH = '../data/fr-en.tar'
+# TAR_PATH = '../data/fr-en.tgz'
 TAR_URL = "https://wit3.fbk.eu/archive/2017-01-trnted/texts/fr/en/fr-en.tgz"
 EXTRACT_PATH = '../data'
 DATA_PATH = '../data/fr-en'
