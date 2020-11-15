@@ -1,6 +1,8 @@
 # import numpy
 import torch
 import logging
+import argparse
+
 import data_loader
 
 
@@ -19,3 +21,8 @@ DATA_PATH = './data/fr-en'
 
 if __name__ == '__main__':
     data_loader.load_data_from_file(DATA_PATH, OUTPUT_PATH)
+    # parser
+
+    # Train
+
+    # Test
