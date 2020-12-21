@@ -5,8 +5,7 @@ venv/
 
 # data
 data/
+model/
 
 # logs
 logs/
-
-test/
