@@ -7,12 +7,12 @@ vocab_size = 2000
 INPUT_FILE_PATHS = '../data/fr-en/fr-en.en.txt,../data/fr-en/fr-en.fr.txt'
 
 # Train Sentencepiece Model
-train_sentencepiece(INPUT_FILE_PATHS)
+# train_sentencepiece(vocab_size, INPUT_FILE_PATHS)
 
 # Load and Tokenize Datasets from File
-test_inputs = encode_sequences('test_spm.model', input_file=INPUT_FILE_PATHS)
+test_inputs = encode_sequences(INPUT_FILE_PATHS, '../model/test_spm.model')
 # Input Embedding
-test_inputs = embed_input(vocab_size, d_model, test_inputs)
+test_inputs = embed_input(test_inputs, vocab_size, d_model)
 
 # Add Positional Encoding
 seq_len = test_inputs.size(1)  # 최대 문장 길이
