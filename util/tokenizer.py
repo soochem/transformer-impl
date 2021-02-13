@@ -61,7 +61,7 @@ def encode_sequences(input_file, model_file='test_spm.model'):
 
     # txt file로 저장된 fr-en.en.txt, fe-en.fr.txt를 토큰 id로 임베딩
     input_file_list = input_file.split(',')
-    print(input_file_list)
+    print('loading file... %s' % str(input_file_list))
     i = 0  # 테스트용
 
     input_data = []
@@ -100,5 +100,5 @@ def embed_input(x, vocab_size, d_model):
     embedding = nn.Embedding(vocab_size, d_model)
     inputs_emb = embedding(x)
     # 100, 69, 128 (sequence length, 문장 당 최대 token 수, hidden_size)
-    print(inputs_emb.size())
+    # print('embedding size: %s' % str(inputs_emb.size()))
     return inputs_emb

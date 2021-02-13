@@ -5,12 +5,46 @@ import numpy as np
 import tokenizer
 
 
-class TransformerModel(nn.Module):
-    def __init__(self, seq_len, d_model, n_head, n_hidden, n_layers, vocab_size, dropout=0.1):
-        self.d_model = d_model
-        self.dropout = nn.Dropout(dropout)
-        self.vocab_size = vocab_size
+def create_padding_mask(x):
+    """
+    x에서 값이 0인 경우 1로 마스킹함
+    :param x: (batch_size, seq_len)
+    :return: mask (batch_size, 1, 1, seq_len)
+    """
+    # mask = x.eq(0).unsqueeze(1).expand(input_sums.size(0), input_sums.size(1), input_sums.size(1))
+    mask = x.eq(0).to(torch.float32)  # bool -> int
+    # mask = mask.unsqueeze(1).expand(x.size(0), x.size(1), x.size(1))
+    mask = mask.unsqueeze(1).unsqueeze(1)
+    return mask
 
+
+def create_look_ahead_mask(x):
+    """
+    자신 보다 미래의 답을 보지 못하게 1로 마스킹함
+    :param x: (batch_size, seq_len)
+    :return: look_ahead_mask (batch_size, 1, seq_len, seq_len)
+    """
+    # 기존의 padding mask를 참고
+    padding_mask = create_padding_mask(x)
+    # 자기 자신 보다 미래에 있는 단어들은 참고하지 못하도록 마스크를 씌운다.
+    # 마스킹 하려는 위치에 1
+    # [[1,0,0], [1,1,0], [1,1,1]]
+    # [[0,1,1], [0,0,1], [0,0,0]]
+    # look_ahead_mask = 1 - torch.tril(torch.ones(padding_mask.size()))  # tuple (x.size(0), x.size(1), x.size(1))
+    look_ahead_mask = 1 - torch.tril(torch.ones(x.size(1), x.size(1)))  # ??
+    # 1, 0 중에 max 값 리턴
+    return torch.max(look_ahead_mask, padding_mask)
+
+
+class TransformerModel(nn.Module):
+    def __init__(self, seq_len, d_model, n_head, n_layers, vocab_size, dropout=0.1):
+        super(TransformerModel, self).__init__()
+        self.d_model = d_model
+        self.dropout = dropout
+        # self.dropout = nn.Dropout(dropout)
+        self.vocab_size = vocab_size
+        self.n_head = n_head
+        self.n_layers = n_layers
         self.pos_encoder = PositionalEncoding(seq_len, d_model, dropout)
         self.init_weights()
 
@@ -18,15 +52,47 @@ class TransformerModel(nn.Module):
         pass
 
     def encode(self, inputs):
-        word_embedding = tokenizer.embed_input(self.vocab_size, self.d_model, inputs)
-        input_encoded = self.pos_encoder.forward(word_embedding)
+        word_embedding = tokenizer.embed_input(inputs, self.vocab_size, self.d_model)
+        outputs = self.pos_encoder.forward(word_embedding)
+        padding_mask = create_padding_mask(inputs)
 
-        # TODO use encoder
+        for i in range(self.n_layers):
+            # 이전 output이 다음 레이어의 input이 된다
+            encoder = Encoder(self.vocab_size, self.d_model, self.n_head, self.dropout)
+            outputs = encoder.encode_layer(outputs,
+                                           padding_mask)
 
-        return input_encoded
+        return outputs
 
-    def forward(self):
-        pass
+    def decode(self, inputs, encoded_output):
+        word_embedding = tokenizer.embed_input(inputs, self.vocab_size, self.d_model)
+        outputs = self.pos_encoder.forward(word_embedding)
+        # padding_mask = inputs.eq(0).unsqueeze(1).expand(outputs.size(0), outputs.size(1), outputs.size(1))
+        padding_mask = create_padding_mask(inputs)
+        look_ahead_mask = create_look_ahead_mask(inputs)
+
+        for i in range(self.n_layers):
+            # 이전 output이 다음 레이어의 input이 된다
+            decoder = Decoder(self.vocab_size, self.d_model, self.n_head, self.dropout)
+            outputs = decoder.decode_layer(outputs,
+                                           encoded_output,
+                                           padding_mask,
+                                           look_ahead_mask)
+
+        return outputs
+
+    def forward(self, inputs):
+        """
+        :param inputs: (batch_size, seq_len, d_model)
+        :return: (batch_size, seq_len, vocab_size)
+        """
+        self.init_weights()
+        encoded_output = self.encode(inputs)
+        decoded_output = self.decode(inputs, encoded_output)
+        # output -> vocab size?
+        # output: (batch_size, seq_len, vocab_size)
+        output = nn.Linear(self.d_model, self.vocab_size)(decoded_output)
+        return output
 
 
 class PositionalEncoding:
@@ -73,13 +139,14 @@ class Encoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
 
-    def encode_layer(self, inputs, mask):
+    def encode_layer(self, inputs, padding_mask):
         """
-        :param inputs: Tensor
+        :param inputs: Embedding Layer
+        :param padding_mask: Padding mask tensor
         :return:
         """
         # Multi Head Attn
-        attn_output = MultiHeadAttention(self.d_model, self.n_head).forward(inputs, inputs, inputs, mask)
+        attn_output = MultiHeadAttention(self.d_model, self.n_head).forward(inputs, inputs, inputs, padding_mask)
         # Dropout
         attn_output = self.dropout(attn_output)
         # Residual Connection & Layer Normalization
@@ -101,7 +168,53 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    pass
+    """
+    첫번째 단어의 output을 다음 단어의 input으로 넣는다
+    """
+    def __init__(self, vocab_size, d_model, n_head, dropout):
+        super(Decoder, self).__init__()
+        self.vocab_size = vocab_size
+        self.d_model = d_model
+        self.n_head = n_head
+        self.dropout = nn.Dropout(dropout)
+        self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
+
+    def decode_layer(self, inputs, enc_outputs, padding_mask, look_ahead_mask):
+        """
+        Decoder layer를 쌓음
+        :param inputs:
+        :param enc_outputs: encoder_layer의 결과
+        :param padding_mask: 2nd sublayer의 mask
+        :param look_ahead_mask: 1st sublayer의 mask
+        :return:
+        """
+        # 1st sublayer
+        # Multi Head Attn
+        attn_output_1 = MultiHeadAttention(self.d_model, self.n_head).forward(inputs, inputs, inputs, look_ahead_mask)
+        # Dropout
+        attn_output_1 = self.dropout(attn_output_1)
+        # Residual Connection & Layer Normalization
+        attn_output_1 = self.layer_norm(inputs + attn_output_1)
+
+        # 2nd sublayer
+        # Multi Head Attn
+        # q: attention output
+        # k, v: encoder output
+        attn_output_2 = MultiHeadAttention(self.d_model, self.n_head).forward(attn_output_1, enc_outputs, enc_outputs, padding_mask)
+        # Dropout
+        attn_output_2 = self.dropout(attn_output_2)
+        # Residual Connection & Layer Normalization
+        attn_output_2 = self.layer_norm(attn_output_1 + attn_output_2)
+
+        # 3rd sublayer
+        # Position-wise FFN
+        ff_output = FeedFoward(self.d_model).forward(attn_output_2)
+        # Dropout
+        attn_output_3 = self.dropout(ff_output)
+        # Residual Connection & Layer Normalization
+        attn_output_3 = self.layer_norm(attn_output_2 + attn_output_3)
+
+        return attn_output_3
 
 
 class ScaledDotAttention(nn.Module):
@@ -181,7 +294,7 @@ class MultiHeadAttention(nn.Module):
         concat_output = attn_output.view(batch_size, -1, self.d_model)
         # Pass Output Dense Layer
         output = self.output_layer(concat_output)
-        print(output.size())
+        # print(output.size())
 
         return output
 
